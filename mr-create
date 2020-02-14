@@ -1,0 +1,52 @@
+#!/usr/bin/env perl
+use strict;
+use warnings;
+use Getopt::Long;
+
+my %option = ( remove_source_branch => 1, );
+
+# project
+$option{project} =
+  ( split /:/, `git config remote.origin.url` )[1] =~ s/\.git$//r;
+
+# current branch
+$option{source_branch} = `git branch --show-current`;
+die "\n" if $?;
+
+# remote default branch
+if ( $option{target_branch} = `git symbolic-ref refs/remotes/origin/HEAD` ) {
+    my @parts = split m'/', $option{target_branch};
+    $option{target_branch} = join '/', @parts[ 3 .. $#parts ];
+}
+else { die "\n" if $?; }
+
+chomp for values %option;
+
+# some default subject
+if ( $option{target_branch} ) {
+    chomp( my $base     = `git merge-base origin/$option{target_branch} HEAD` );
+    chomp( my @subjects = `git log --pretty=format:%s $base..` );
+    $option{title} = shift @subjects;    # most recent commit?
+}
+
+GetOptions(
+    \%option,
+    'project=s',
+    'remove_source_branch|remove-source-branch!',
+    'source_branch|source-branch=s',
+    'target_branch|target-branch=s',
+    'title=s', 'remove_source_branch|remove-source-branch!',
+) or die "\n";                           # TODO USAGE
+
+# Build the command-line
+my @cmd = qw( gitlab-api-v4 create_merge_request );
+push @cmd, delete $option{project};
+require GitLab::API::v4;
+if ( $GitLab::API::v4::VERSION >= 0.15 ) {    # BREAKING CHANGE: param:value
+    push @cmd, map "$_:$option{$_}", grep $option{$_}, sort keys %option;
+}
+else {                                        # older version: --param=value
+    push @cmd, map "--$_=$option{$_}", grep $option{$_}, sort keys %option;
+}
+
+print "@cmd\n";
