@@ -3,50 +3,56 @@ use strict;
 use warnings;
 use Getopt::Long;
 
-my %option = ( remove_source_branch => 1, );
-
-# project
-$option{project} =
-  ( split /:/, `git config remote.origin.url` )[1] =~ s/\.git$//r;
-
-# current branch
-$option{source_branch} = `git branch --show-current`;
-die "\n" if $?;
-
-# remote default branch
-if ( $option{target_branch} = `git symbolic-ref refs/remotes/origin/HEAD` ) {
-    my @parts = split m'/', $option{target_branch};
-    $option{target_branch} = join '/', @parts[ 3 .. $#parts ];
-}
-else { die "\n" if $?; }
-
-chomp for values %option;
-
-# some default subject
-if ( $option{target_branch} ) {
-    chomp( my $base     = `git merge-base origin/$option{target_branch} HEAD` );
-    chomp( my @subjects = `git log --pretty=format:%s $base..` );
-    $option{title} = shift @subjects;    # most recent commit?
+# tiny utility
+sub shellquote {
+    my $arg = shift;
+    return $arg =~ /\A\w+\z/ ? $arg : qq{'${\($arg=~s/'/'"'"'/gr)}'};
 }
 
-GetOptions(
-    \%option,
-    'project=s',
-    'remove_source_branch|remove-source-branch!',
-    'source_branch|source-branch=s',
-    'target_branch|target-branch=s',
-    'title=s', 'remove_source_branch|remove-source-branch!',
-) or die "\n";                           # TODO USAGE
+my %argument;
+my %option = (
+    'project=s' => sub {
+        ( split /:/, `git config remote.origin.url` )[1] =~ s/\.git$//r;
+    },
+    'remove_source_branch|remove-source-branch!' => 1,
+    'source_branch|source-branch=s' => sub { `git branch --show-current` },
+    'target_branch|target-branch=s' => sub {
+        my @parts = split m'/', `git symbolic-ref refs/remotes/origin/HEAD`;
+        chomp( my $target = join '/', @parts[ 3 .. $#parts ] );
+        $target;
+    },
+    'title=s' => sub {
+        chomp( my $base =
+              `git merge-base origin/$argument{target_branch} HEAD` );
+        chomp( my @subjects = `git log --pretty=format:%s $base..` );
+        shift @subjects;    # most recent commit?
+    },
+);
+
+# since we sort options by name,
+# `target_branch` is computed just in time for `title`
+for my $option ( sort keys %option ) {
+    my ($argument) = split /[|=!]/, $option;
+    $argument{$argument} =
+      ref $option{$option} eq 'CODE'
+      ? $option{$option}->()
+      : $option{$option};
+    die "Failed to compute default $argument\n" if $?;
+}
+chomp for values %argument;
+
+GetOptions( \%argument, sort keys %option ) or die "\n";    # TODO USAGE
 
 # Build the command-line
-my @cmd = qw( gitlab-api-v4 create_merge_request );
-push @cmd, delete $option{project};
 require GitLab::API::v4;
-if ( $GitLab::API::v4::VERSION >= 0.15 ) {    # BREAKING CHANGE: param:value
-    push @cmd, map "$_:$option{$_}", grep $option{$_}, sort keys %option;
-}
-else {                                        # older version: --param=value
-    push @cmd, map "--$_=$option{$_}", grep $option{$_}, sort keys %option;
-}
+my @cmd = qw( gitlab-api-v4 create_merge_request );
+push @cmd, delete $argument{project},    # required
+  map {                                  # all other options
+    $GitLab::API::v4::VERSION >= 0.15
+      ? join( ':', $_,     shellquote( $argument{$_} ) )    # param:value
+      : join( '=', "--$_", shellquote( $argument{$_} ) )    # --param=value
+  }
+  grep $argument{$_},
+  sort keys %argument;
 
 print "@cmd\n";
