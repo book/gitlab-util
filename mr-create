@@ -29,19 +29,21 @@ my %option = (
     },
 );
 
+GetOptions( \%argument, sort keys %option ) or die "\n";    # TODO USAGE
+
 # since we sort options by name,
 # `target_branch` is computed just in time for `title`
 for my $option ( sort keys %option ) {
     my ($argument) = split /[|=!]/, $option;
-    $argument{$argument} =
-      ref $option{$option} eq 'CODE'
-      ? $option{$option}->()
-      : $option{$option};
-    die "Failed to compute default $argument\n" if $?;
+    if ( !exists $argument{$argument} ) {
+        $argument{$argument} =
+          ref $option{$option} eq 'CODE'
+          ? $option{$option}->()
+          : $option{$option};
+        die "Failed to compute default $argument\n" if $?;
+    }
 }
 chomp for values %argument;
-
-GetOptions( \%argument, sort keys %option ) or die "\n";    # TODO USAGE
 
 # Build the command-line
 require GitLab::API::v4;
